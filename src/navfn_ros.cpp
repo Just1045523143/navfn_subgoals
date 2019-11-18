@@ -63,14 +63,16 @@ namespace navfn {
   }
 
   void NavfnROS::initialize(std::string name, costmap_2d::Costmap2D* costmap, std::string global_frame){
+    ROS_WARN("entering initialize navfnros");
     if(!initialized_){
+      ROS_WARN("entering inside loop of initiialize navfnros");
       costmap_ = costmap;
       global_frame_ = global_frame;
       planner_ = boost::shared_ptr<NavFn>(new NavFn(costmap_->getSizeInCellsX(), costmap_->getSizeInCellsY()));
 
       ros::NodeHandle private_nh("~/" + name);
 
-      plan_pub_ = private_nh.advertise<nav_msgs::Path>("plan", 1);
+      plan_pub_ = private_nh.advertise<nav_msgs::Path>("plan", 5);
 
       private_nh.param("visualize_potential", visualize_potential_, false);
 
@@ -88,6 +90,11 @@ namespace navfn {
       tf_prefix_ = tf::getPrefixParam(prefix_nh);
 
       make_plan_srv_ =  private_nh.advertiseService("make_plan", &NavfnROS::makePlanService, this);
+      subgoal_pose_sub_ = private_nh.subscribe("/initialpose",1, &NavfnROS::subgoalCallback, this); // loop up how to do this properly, use this?
+
+      subgoal_pub_ = private_nh.advertise<geometry_msgs::PoseArray>("/planned_subgoals", 1);
+      v_subgoals_.header.frame_id = "map";
+
 
       initialized_ = true;
     }
@@ -200,19 +207,85 @@ namespace navfn {
       const geometry_msgs::PoseStamped& goal, std::vector<geometry_msgs::PoseStamped>& plan){
     return makePlan(start, goal, default_tolerance_, plan);
   }
+  /*
+  bool isBacktracking(std::vector<geometry_msgs::PoseStamped> to_subgoal, std::vector<geometry_msgs::PoseStamped> from_subgoal)
+  {
 
-  bool NavfnROS::makePlan(const geometry_msgs::PoseStamped& start, 
-      const geometry_msgs::PoseStamped& goal, double tolerance, std::vector<geometry_msgs::PoseStamped>& plan){
+    int max_number_points = 10;
+    if(to_subgoal.size() < max_number_points || from_subgoal.size() < max_number_points)
+    {
+      ROS_WARN("Too small vector to evaluate backtracking, assuming no backtrack");
+      return false;
+    }
+    for(int i = 0; i < max_number_points; i++)
+    {
+      to_subgoal.at(to_subgoal.end());
+      to_subgoal[0].pose.position.x;
+
+      //fabs(std::sqrt(pow(subgoal_pose.position.x - wx,2)+pow(subgoal_pose.position.y - wy,2))) < 1.0);
+
+    }
+
+  }*/
+
+  bool NavfnROS::makePlan(const geometry_msgs::PoseStamped& start, const geometry_msgs::PoseStamped& goal, double tolerance, std::vector<geometry_msgs::PoseStamped>& plan){
     boost::mutex::scoped_lock lock(mutex_);
     if(!initialized_){
       ROS_ERROR("This planner has not been initialized yet, but it is being used, please call initialize() before use");
       return false;
     }
+    ROS_DEBUG("entering makePlan");
 
     //clear the plan, just in case
     plan.clear();
 
     ros::NodeHandle n;
+
+    // if vector is not empty 😮
+
+    // remove subgoal if already close to it? 🤔
+
+    // generate path between A-B-C-D 😎
+
+    // when done generate path between D-Goal 😊
+
+    // truncate the vectors 💪 😬 
+    /*
+    AB.reserve( A.size() + B.size() ); // preallocate memory
+    AB.insert( AB.end(), A.begin(), A.end() );
+    AB.insert( AB.end(), B.begin(), B.end() );
+    */
+    double wx = start.pose.position.x;
+    double wy = start.pose.position.y;
+
+    double wx_curr = start.pose.position.x;
+    double wy_curr = start.pose.position.y;
+    geometry_msgs::PoseArray test;
+    geometry_msgs::PoseStamped subgoal = goal;  // This overriden by the vector's poses to get the correct header.
+    geometry_msgs::PoseStamped substart = start; // this will be the start for the next subgoal or the goal
+
+    for( const auto &subgoal_pose : v_subgoals_.poses) // maybe skip if too far away and then use later?
+    {
+
+      if(fabs(std::sqrt(pow(subgoal_pose.position.x - wx,2)+pow(subgoal_pose.position.y - wy,2))) < 1.0) // 1m goal tolerance
+      {
+        v_subgoals_.poses.clear(); // change this later
+        continue;
+
+      }
+
+      subgoal.pose = subgoal_pose;
+      // how to do the remove?
+      if(makePlanSubgoal(substart, subgoal, 0, plan))
+      {
+       substart.pose = subgoal_pose; // go to next goal
+       ROS_INFO("Succesfully calculated path to subgoal, length %d", plan.size());
+      }
+      else
+      {
+        ROS_ERROR("Failed to compute plan for subgoal"); // will try to use previous point as reference for the next goal
+      }
+    }
 
     //until tf can handle transforming things that are way in the past... we'll require the goal to be in our global frame
     if(tf::resolve(tf_prefix_, goal.header.frame_id) != tf::resolve(tf_prefix_, global_frame_)){
@@ -227,8 +300,8 @@ namespace navfn {
       return false;
     }
 
-    double wx = start.pose.position.x;
-    double wy = start.pose.position.y;
+     wx = substart.pose.position.x;
+     wy = substart.pose.position.y;
 
     unsigned int mx, my;
     if(!costmap_->worldToMap(wx, wy, mx, my)){
@@ -238,30 +311,12 @@ namespace navfn {
 
     //clear the starting cell within the costmap because we know it can't be an obstacle
     tf::Stamped<tf::Pose> start_pose;
-    tf::poseStampedMsgToTF(start, start_pose);
+    tf::poseStampedMsgToTF(substart, start_pose);
     clearRobotCell(start_pose, mx, my);
-
-#if 0
-    {
-      static int n = 0;
-      static char filename[1000];
-      snprintf( filename, 1000, "navfnros-makeplan-costmapB-%04d.pgm", n++ );
-      costmap->saveRawMap( std::string( filename ));
-    }
-#endif
 
     //make sure to resize the underlying array that Navfn uses
     planner_->setNavArr(costmap_->getSizeInCellsX(), costmap_->getSizeInCellsY());
     planner_->setCostmap(costmap_->getCharMap(), true, allow_unknown_);
-
-#if 0
-    {
-      static int n = 0;
-      static char filename[1000];
-      snprintf( filename, 1000, "navfnros-makeplan-costmapC-%04d", n++ );
-      planner_->savemap( filename );
-    }
-#endif
 
     int map_start[2];
     map_start[0] = mx;
@@ -286,7 +341,148 @@ namespace navfn {
     planner_->setStart(map_goal);
     planner_->setGoal(map_start);
 
-    //bool success = planner_->calcNavFnAstar();
+    planner_->calcNavFnDijkstra(true);
+
+    double resolution = costmap_->getResolution();
+    geometry_msgs::PoseStamped p, best_pose;
+    p = goal;
+
+    bool found_legal = false;
+    double best_sdist = DBL_MAX;
+
+    p.pose.position.y = goal.pose.position.y - tolerance;
+
+    while(p.pose.position.y <= goal.pose.position.y + tolerance){
+      p.pose.position.x = goal.pose.position.x - tolerance;
+      while(p.pose.position.x <= goal.pose.position.x + tolerance){
+        double potential = getPointPotential(p.pose.position);
+        double sdist = sq_distance(p, goal);
+        if(potential < POT_HIGH && sdist < best_sdist){
+          best_sdist = sdist;
+          best_pose = p;
+          found_legal = true;
+        }
+        p.pose.position.x += resolution;
+      }
+      p.pose.position.y += resolution;
+    }
+
+    if(found_legal){
+      //extract the plan
+      std::vector<geometry_msgs::PoseStamped> plan_to_goal;
+      if(getPlanFromPotential(best_pose, plan_to_goal)){
+        //make sure the goal we push on has the same timestamp as the rest of the plan
+        geometry_msgs::PoseStamped goal_copy = best_pose;
+        goal_copy.header.stamp = ros::Time::now();
+        ROS_INFO("Succesfully calculated path to goal, length %d", plan_to_goal.size());
+        //plan.reserve( plan.size() + plan_to_goal.size() ); // preallocate memory
+        plan.insert( plan.end(), plan_to_goal.begin(), plan_to_goal.end() );
+        plan.push_back(goal_copy);
+      }
+      else{
+        ROS_ERROR("Failed to get a plan from potential when a legal potential was found. This shouldn't happen.");
+      }
+    }
+
+    if (visualize_potential_){
+      //publish potential array
+      pcl::PointCloud<PotarrPoint> pot_area;
+      pot_area.header.frame_id = global_frame_;
+      pot_area.points.clear();
+      std_msgs::Header header;
+      pcl_conversions::fromPCL(pot_area.header, header);
+      header.stamp = ros::Time::now();
+      pot_area.header = pcl_conversions::toPCL(header);
+
+      PotarrPoint pt;
+      float *pp = planner_->potarr;
+      double pot_x, pot_y;
+      for (unsigned int i = 0; i < (unsigned int)planner_->ny*planner_->nx ; i++)
+      {
+        if (pp[i] < 10e7)
+        {
+          mapToWorld(i%planner_->nx, i/planner_->nx, pot_x, pot_y);
+          pt.x = pot_x;
+          pt.y = pot_y;
+          pt.z = pp[i]/pp[planner_->start[1]*planner_->nx + planner_->start[0]]*20;
+          pt.pot_value = pp[i];
+          pot_area.push_back(pt);
+        }
+      }
+      potarr_pub_.publish(pot_area);
+    }
+
+    //publish the plan for visualization purposes
+    publishPlan(plan, 0.0, 1.0, 0.0, 0.0);
+
+    return !plan.empty();
+  }
+  bool NavfnROS::makePlanSubgoal(const geometry_msgs::PoseStamped& start,
+      const geometry_msgs::PoseStamped& goal, double tolerance, std::vector<geometry_msgs::PoseStamped>& plan){
+
+    ROS_DEBUG("entering makePlanSubgoal");
+
+    //clear the plan, just in case
+    plan.clear();
+
+    ros::NodeHandle n; // probably remove this
+    double wx = start.pose.position.x;
+    double wy = start.pose.position.y;
+
+    /* we let the normal makePlan loop handle the frame issues as these header names are passed over from there
+     //until tf can handle transforming things that are way in the past... we'll require the goal to be in our global frame
+    if(tf::resolve(tf_prefix_, goal.header.frame_id) != tf::resolve(tf_prefix_, global_frame_)){
+      ROS_ERROR("The goal pose passed to this planner must be in the %s frame.  It is instead in the %s frame.",
+                tf::resolve(tf_prefix_, global_frame_).c_str(), tf::resolve(tf_prefix_, goal.header.frame_id).c_str());
+      return false;
+    }
+
+    if(tf::resolve(tf_prefix_, start.header.frame_id) != tf::resolve(tf_prefix_, global_frame_)){
+      ROS_ERROR("The start pose passed to this planner must be in the %s frame.  It is instead in the %s frame.",
+                tf::resolve(tf_prefix_, global_frame_).c_str(), tf::resolve(tf_prefix_, start.header.frame_id).c_str());
+      return false;
+    }*/
+
+
+
+    unsigned int mx, my;
+    if(!costmap_->worldToMap(wx, wy, mx, my)){
+      ROS_WARN("The robot's sub_goal start position is off the global costmap. Planning will always fail, are you sure the robot has been properly localized?");
+      return false;
+    }
+
+    //clear the starting cell within the costmap because we know it can't be an obstacle
+    tf::Stamped<tf::Pose> start_pose;
+    tf::poseStampedMsgToTF(start, start_pose);
+    clearRobotCell(start_pose, mx, my);
+
+    //make sure to resize the underlying array that Navfn uses
+    planner_->setNavArr(costmap_->getSizeInCellsX(), costmap_->getSizeInCellsY());
+    planner_->setCostmap(costmap_->getCharMap(), true, allow_unknown_);
+
+    int map_start[2];
+    map_start[0] = mx;
+    map_start[1] = my;
+
+    wx = goal.pose.position.x;
+    wy = goal.pose.position.y;
+
+    if(!costmap_->worldToMap(wx, wy, mx, my)){
+      if(tolerance <= 0.0){
+        ROS_WARN_THROTTLE(1.0, "The goal sent to the navfn planner is off the global costmap. Planning will always fail to this goal.");
+        return false;
+      }
+      mx = 0;
+      my = 0;
+    }
+
+    int map_goal[2];
+    map_goal[0] = mx;
+    map_goal[1] = my;
+
+    planner_->setStart(map_goal);
+    planner_->setGoal(map_start);
+
     planner_->calcNavFnDijkstra(true);
 
     double resolution = costmap_->getResolution();
@@ -355,9 +551,16 @@ namespace navfn {
     }
 
     //publish the plan for visualization purposes
-    publishPlan(plan, 0.0, 1.0, 0.0, 0.0);
+    //publishPlan(plan, 0.0, 1.0, 0.0, 0.0);
 
     return !plan.empty();
+  }
+  void NavfnROS::subgoalCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr &subgoal)
+  {
+    boost::mutex::scoped_lock lock(mutex_);
+    v_subgoals_.poses.push_back(subgoal->pose.pose);
+    ROS_INFO("Current number of subgoals %d", v_subgoals_.poses.size());
+    subgoal_pub_.publish(v_subgoals_);
   }
 
   void NavfnROS::publishPlan(const std::vector<geometry_msgs::PoseStamped>& path, double r, double g, double b, double a){

@@ -79,7 +79,7 @@ namespace navfn {
       // calculate the nav fn and path
       nav->priInc = 2*COST_NEUTRAL;
       nav->propNavFnAstar(std::max(nx*ny/20,nx+ny));
-
+      ROS_DEBUG("asdsads\n");
       // path
       int len = nav->calcPath(nplan);
 

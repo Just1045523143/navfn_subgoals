@@ -49,7 +49,8 @@
 #include <nav_msgs/GetPlan.h>
 #include <navfn/potarr_point.h>
 #include <pcl_ros/publisher.h>
-
+#include <geometry_msgs/PoseArray.h> //added for sub_goal planning
+#include <geometry_msgs/PoseWithCovarianceStamped.h> // added for reading initial pose
 namespace navfn {
   /**
    * @class NavfnROS
@@ -112,6 +113,18 @@ namespace navfn {
        */
       bool makePlan(const geometry_msgs::PoseStamped& start, 
           const geometry_msgs::PoseStamped& goal, double tolerance, std::vector<geometry_msgs::PoseStamped>& plan);
+      /**
+       * @brief Given a subgoal pose in the world, compute a plan. Needs to be truncated for reaching the end goal.
+       * @param start The start pose
+       * @param goal The goal pose
+       * @param tolerance The tolerance on the goal point for the planner
+       * @param plan The plan... filled by the planner
+       * @return True if a valid plan was found, false otherwise
+       */
+      bool makePlanSubgoal(const geometry_msgs::PoseStamped& start,
+          const geometry_msgs::PoseStamped& goal, double tolerance, std::vector<geometry_msgs::PoseStamped>& plan);
+
+      void subgoalCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& subgoal);
 
       /**
        * @brief  Computes the full navigation function for the map given a point in the world to start from
@@ -185,6 +198,12 @@ namespace navfn {
       boost::mutex mutex_;
       ros::ServiceServer make_plan_srv_;
       std::string global_frame_;
+
+      // used for sub_goal planning
+      //std::vector<geometry_msgs::Pose> v_subgoals_;
+      geometry_msgs::PoseArray v_subgoals_;
+      ros::Publisher subgoal_pub_;
+      ros::Subscriber subgoal_pose_sub_;
   };
 };
 
