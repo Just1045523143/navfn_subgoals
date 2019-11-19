@@ -193,7 +193,7 @@ namespace navfn {
 
       void mapToWorld(double mx, double my, double& wx, double& wy);
       void clearRobotCell(const tf::Stamped<tf::Pose>& global_pose, unsigned int mx, unsigned int my);
-      double planner_window_x_, planner_window_y_, default_tolerance_;
+      double planner_window_x_, planner_window_y_, default_tolerance_, subgoal_tolerance_;
       std::string tf_prefix_;
       boost::mutex mutex_;
       ros::ServiceServer make_plan_srv_;

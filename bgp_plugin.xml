@@ -1,7 +1,7 @@
 <library path="lib/libnavfn">
   <class name="navfn/NavfnROS" type="navfn::NavfnROS" base_class_type="nav_core::BaseGlobalPlanner">
     <description>
-      A implementation of a grid based planner using Dijkstra
+      A implementation of a grid based planner using Dijkstra, this version has subgoals that can be queued using /initialpose (2D pose estimate in rviz).
     </description>
   </class>
 </library>

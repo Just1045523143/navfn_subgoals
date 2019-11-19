@@ -85,6 +85,8 @@ namespace navfn {
       private_nh.param("planner_window_y", planner_window_y_, 0.0);
       private_nh.param("default_tolerance", default_tolerance_, 0.0);
 
+      private_nh.param("subgoal_tolerance", subgoal_tolerance_, 1.0);
+
       //get the tf prefix
       ros::NodeHandle prefix_nh;
       tf_prefix_ = tf::getPrefixParam(prefix_nh);
@@ -250,11 +252,7 @@ namespace navfn {
     // when done generate path between D-Goal 😊
 
     // truncate the vectors 💪 😬 
-    /*
-    AB.reserve( A.size() + B.size() ); // preallocate memory
-    AB.insert( AB.end(), A.begin(), A.end() );
-    AB.insert( AB.end(), B.begin(), B.end() );
-    */
+
     double wx = start.pose.position.x;
     double wy = start.pose.position.y;
 
@@ -264,27 +262,35 @@ namespace navfn {
     geometry_msgs::PoseStamped subgoal = goal;  // This overriden by the vector's poses to get the correct header.
     geometry_msgs::PoseStamped substart = start; // this will be the start for the next subgoal or the goal
 
-    for( const auto &subgoal_pose : v_subgoals_.poses) // maybe skip if too far away and then use later?
+    std::vector<geometry_msgs::Pose>::iterator it;
+    for(it = v_subgoals_.poses.begin(); it != v_subgoals_.poses.end(); )
     {
+      ROS_INFO_STREAM("pose x: " << (*it).position.x << " y: "<< (*it).position.y);
 
-      if(fabs(std::sqrt(pow(subgoal_pose.position.x - wx,2)+pow(subgoal_pose.position.y - wy,2))) < 1.0) // 1m goal tolerance
+      if(fabs(std::sqrt(pow((*it).position.x - wx,2)+pow((*it).position.y - wy,2))) < subgoal_tolerance_) // If within goal tolerance (meters).
       {
-        v_subgoals_.poses.clear(); // change this later
+        it = v_subgoals_.poses.erase(it); // returns next element
+        subgoal_pub_.publish(v_subgoals_);
         continue;
-
-      }
-
-      subgoal.pose = subgoal_pose;
-      // how to do the remove?
-      if(makePlanSubgoal(substart, subgoal, 0, plan))
-      {
-       substart.pose = subgoal_pose; // go to next goal
-       ROS_INFO("Succesfully calculated path to subgoal, length %d", plan.size());
       }
       else
       {
-        ROS_ERROR("Failed to compute plan for subgoal"); // will try to use previous point as reference for the next goal
+        subgoal.pose = *it; // set first reachable goal
+        if(makePlanSubgoal(substart, subgoal, 0, plan))
+        {
+         substart.pose = *it; // set goal as new start position
+         ROS_INFO("Succesfully calculated path to subgoal, length %d", plan.size());
+         break; // done calculating
+        }
+        else
+        {
+         ROS_ERROR("Failed to compute plan for subgoal"); // will try to use previous point as reference for the next goal
+         // will try for next goal instead
+         it = v_subgoals_.poses.erase(it); // returns next element
+         subgoal_pub_.publish(v_subgoals_);
+        }
       }
+
     }
 
     //until tf can handle transforming things that are way in the past... we'll require the goal to be in our global frame
@@ -340,6 +346,7 @@ namespace navfn {
 
     planner_->setStart(map_goal);
     planner_->setGoal(map_start);
+    // No idea why they decide to flip goal and start but my guess is that Dijkstra solves from goal to current position.
 
     planner_->calcNavFnDijkstra(true);
 
@@ -366,55 +373,57 @@ namespace navfn {
       }
       p.pose.position.y += resolution;
     }
-
-    if(found_legal){
-      //extract the plan
-      std::vector<geometry_msgs::PoseStamped> plan_to_goal;
-      if(getPlanFromPotential(best_pose, plan_to_goal)){
-        //make sure the goal we push on has the same timestamp as the rest of the plan
-        geometry_msgs::PoseStamped goal_copy = best_pose;
-        goal_copy.header.stamp = ros::Time::now();
-        ROS_INFO("Succesfully calculated path to goal, length %d", plan_to_goal.size());
-        //plan.reserve( plan.size() + plan_to_goal.size() ); // preallocate memory
-        plan.insert( plan.end(), plan_to_goal.begin(), plan_to_goal.end() );
-        plan.push_back(goal_copy);
-      }
-      else{
-        ROS_ERROR("Failed to get a plan from potential when a legal potential was found. This shouldn't happen.");
-      }
-    }
-
-    if (visualize_potential_){
-      //publish potential array
-      pcl::PointCloud<PotarrPoint> pot_area;
-      pot_area.header.frame_id = global_frame_;
-      pot_area.points.clear();
-      std_msgs::Header header;
-      pcl_conversions::fromPCL(pot_area.header, header);
-      header.stamp = ros::Time::now();
-      pot_area.header = pcl_conversions::toPCL(header);
-
-      PotarrPoint pt;
-      float *pp = planner_->potarr;
-      double pot_x, pot_y;
-      for (unsigned int i = 0; i < (unsigned int)planner_->ny*planner_->nx ; i++)
-      {
-        if (pp[i] < 10e7)
-        {
-          mapToWorld(i%planner_->nx, i/planner_->nx, pot_x, pot_y);
-          pt.x = pot_x;
-          pt.y = pot_y;
-          pt.z = pp[i]/pp[planner_->start[1]*planner_->nx + planner_->start[0]]*20;
-          pt.pot_value = pp[i];
-          pot_area.push_back(pt);
+    if( it == v_subgoals_.poses.end()) // if subgoals are done
+    {
+      if(found_legal){
+        //extract the plan
+        std::vector<geometry_msgs::PoseStamped> plan_to_goal;
+        if(getPlanFromPotential(best_pose, plan_to_goal)){
+          //make sure the goal we push on has the same timestamp as the rest of the plan
+          geometry_msgs::PoseStamped goal_copy = best_pose;
+          goal_copy.header.stamp = ros::Time::now();
+          ROS_INFO("Succesfully calculated path to goal, length %d", plan_to_goal.size());
+          //plan.reserve( plan.size() + plan_to_goal.size() ); // preallocate memory
+          plan.insert( plan.end(), plan_to_goal.begin(), plan_to_goal.end() ); // combines plans
+          plan.push_back(goal_copy);
+        }
+        else{
+          ROS_ERROR("Failed to get a plan from potential when a legal potential was found. This shouldn't happen.");
         }
       }
-      potarr_pub_.publish(pot_area);
+
+      if (visualize_potential_){
+        //publish potential array
+        pcl::PointCloud<PotarrPoint> pot_area;
+        pot_area.header.frame_id = global_frame_;
+        pot_area.points.clear();
+        std_msgs::Header header;
+        pcl_conversions::fromPCL(pot_area.header, header);
+        header.stamp = ros::Time::now();
+        pot_area.header = pcl_conversions::toPCL(header);
+
+        PotarrPoint pt;
+        float *pp = planner_->potarr;
+        double pot_x, pot_y;
+        for (unsigned int i = 0; i < (unsigned int)planner_->ny*planner_->nx ; i++)
+        {
+          if (pp[i] < 10e7)
+          {
+            mapToWorld(i%planner_->nx, i/planner_->nx, pot_x, pot_y);
+            pt.x = pot_x;
+            pt.y = pot_y;
+            pt.z = pp[i]/pp[planner_->start[1]*planner_->nx + planner_->start[0]]*20;
+            pt.pot_value = pp[i];
+            pot_area.push_back(pt);
+          }
+        }
+        potarr_pub_.publish(pot_area);
+      }
+
+      //publish the plan for visualization purposes
+      publishPlan(plan, 0.0, 1.0, 0.0, 0.0);
+      return !plan.empty();
     }
-
-    //publish the plan for visualization purposes
-    publishPlan(plan, 0.0, 1.0, 0.0, 0.0);
-
     return !plan.empty();
   }
   bool NavfnROS::makePlanSubgoal(const geometry_msgs::PoseStamped& start,
