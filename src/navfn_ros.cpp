@@ -95,7 +95,7 @@ namespace navfn {
       subgoal_pose_sub_ = private_nh.subscribe("/initialpose",1, &NavfnROS::subgoalCallback, this); // loop up how to do this properly, use this?
 
       subgoal_pub_ = private_nh.advertise<geometry_msgs::PoseArray>("/planned_subgoals", 1);
-      v_subgoals_.header.frame_id = "map";
+      v_subgoals_.header.frame_id = "odom";
 
 
       initialized_ = true;
@@ -558,9 +558,6 @@ namespace navfn {
       }
       potarr_pub_.publish(pot_area);
     }
-
-    //publish the plan for visualization purposes
-    //publishPlan(plan, 0.0, 1.0, 0.0, 0.0);
 
     return !plan.empty();
   }
