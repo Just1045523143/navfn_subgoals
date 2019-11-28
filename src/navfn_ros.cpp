@@ -243,16 +243,6 @@ namespace navfn {
 
     ros::NodeHandle n;
 
-    // if vector is not empty 😮
-
-    // remove subgoal if already close to it? 🤔
-
-    // generate path between A-B-C-D 😎
-
-    // when done generate path between D-Goal 😊
-
-    // truncate the vectors 💪 😬 
-
     double wx = start.pose.position.x;
     double wy = start.pose.position.y;
 
