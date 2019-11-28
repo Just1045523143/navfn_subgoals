@@ -63,9 +63,8 @@ namespace navfn {
   }
 
   void NavfnROS::initialize(std::string name, costmap_2d::Costmap2D* costmap, std::string global_frame){
-    ROS_WARN("entering initialize navfnros");
     if(!initialized_){
-      ROS_WARN("entering inside loop of initiialize navfnros");
+      ROS_DEBUG("entering inside loop of initiialize navfnros");
       costmap_ = costmap;
       global_frame_ = global_frame;
       planner_ = boost::shared_ptr<NavFn>(new NavFn(costmap_->getSizeInCellsX(), costmap_->getSizeInCellsY()));
